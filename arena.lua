@@ -64,6 +64,14 @@ player = {
     -- lifesteal_ability siphons a portion of damage dealt back as HP.
     heal_ability = false,
     lifesteal_ability = false
+    ,
+    -- Blood Strike ability flag.  This is granted by a shrine event and
+    -- allows the player to sacrifice HP and stamina for a powerful
+    -- strike with increased stats and a temporary dodge boost.
+    blood_strike_ability = false,
+    -- Temporary dodge bonus applied during special attacks like Blood
+    -- Strike.  This bonus is consumed after the next enemy attack.
+    temp_dodge_bonus = 0
 }
 
 -- Monster kill tracking for boss spawning
@@ -122,6 +130,16 @@ boss_unique_items = {
         description = "+8 Defense, +30 Max HP"
     }
 }
+
+tips = {
+    "💡 Slimes have the ability to regen health!.",
+    "💡 Skeletons have strong armor!.",
+    "💡 Goblins have increased power!.",
+    "💡 Bats have increased dodge and an accurate counter-attack!.",
+    "💡 Worms have highly resistant hide!.",
+    "💡 Bosses have multiple attacks!.",
+}
+
 
 function player:attack(target)
     local hit_chance = math.random(1, 20) + math.floor(self.accuracy / 2)
@@ -238,6 +256,58 @@ function player:add_item(item)
     if item.stamina_regen_bonus and item.stamina_regen_bonus > 0 then
         print("  ♻️  Stamina Regen increased by " .. item.stamina_regen_bonus)
     end
+end
+
+-- Sell an item from the player's inventory.  Returns true and the
+-- amount gained if successful, or false and an error message if not.
+-- Selling removes the item's bonuses from the player and refunds
+-- half of the original purchase price.  Items without a price (e.g.
+-- boss drops) cannot be sold.
+function player:sell_item(index)
+    local item = self.inventory[index]
+    if not item then
+        return false, "Invalid item number."
+    end
+    -- Items without a price are considered unsellable (e.g. boss loot)
+    if not item.price then
+        return false, "You cannot sell " .. item.name .. "."
+    end
+    -- Determine sell price (half, rounded down)
+    local sell_price = math.floor(item.price / 2)
+    -- Remove stat bonuses
+    if item.power_bonus then
+        self.power = self.power - item.power_bonus
+    end
+    if item.defense_bonus then
+        self.defense = self.defense - item.defense_bonus
+    end
+    if item.accuracy_bonus then
+        self.accuracy = self.accuracy - item.accuracy_bonus
+    end
+    if item.dodge_bonus then
+        self.dodge = self.dodge - item.dodge_bonus
+    end
+    if item.max_hp_bonus then
+        self.max_hp = self.max_hp - item.max_hp_bonus
+        -- Adjust current HP if it exceeds the new maximum
+        if self.hp > self.max_hp then
+            self.hp = self.max_hp
+        end
+    end
+    if item.max_stamina_bonus then
+        self.max_stamina = self.max_stamina - item.max_stamina_bonus
+        if self.stamina > self.max_stamina then
+            self.stamina = self.max_stamina
+        end
+    end
+    if item.stamina_regen_bonus then
+        self.stamina_regen = self.stamina_regen - item.stamina_regen_bonus
+    end
+    -- Remove from inventory
+    table.remove(self.inventory, index)
+    -- Refund coins
+    self.coins = self.coins + sell_price
+    return true, sell_price, item.name
 end
 
 function player:use_evasion_potion()
@@ -602,6 +672,106 @@ function generate_boss(base_name, level)
     }
 end
 
+-- Random event: finding a treasure chest.  The chest contains a
+-- single item or potion, with drop chances weighted by rarity.
+local function chest_event()
+    clear_console()
+    print("🎁 You stumble upon a mysterious chest!")
+    -- Determine what the chest contains.  Potions are far more common
+    -- than equipment; rare items are very rare.
+    local roll = math.random(1, 100)
+    if roll <= 40 then
+        -- Evasion potion (very common)
+        player.evasion_potions = player.evasion_potions + 1
+        print("🧪 Inside you find an Evasion Potion! Total: " .. player.evasion_potions)
+    elseif roll <= 70 then
+        -- Stamina potion (common)
+        player.stamina_potions = player.stamina_potions + 1
+        print("⚡ Inside you find a Stamina Potion! Total: " .. player.stamina_potions)
+    elseif roll <= 85 then
+        -- Health potion (less common)
+        player.health_potions = player.health_potions + 1
+        print("❤️  Inside you find a Health Potion! Total: " .. player.health_potions)
+    elseif roll <= 95 then
+        -- Uncommon equipment
+        local pool = {}
+        for _, itm in ipairs(item_pool) do
+            if itm.rarity == "uncommon" then
+                table.insert(pool, itm)
+            end
+        end
+        if #pool > 0 then
+            local drop = pool[math.random(#pool)]
+            print("🗃️  The chest contained " .. drop.name .. "! (" .. drop.description .. ")")
+            player:add_item(drop)
+        else
+            print("The chest was empty...")
+        end
+    else
+        -- Rare equipment (very rare)
+        local pool = {}
+        for _, itm in ipairs(item_pool) do
+            if itm.rarity == "rare" then
+                table.insert(pool, itm)
+            end
+        end
+        if #pool > 0 then
+            local drop = pool[math.random(#pool)]
+            print("✨ The chest contained " .. drop.name .. "! (" .. drop.description .. ")")
+            player:add_item(drop)
+        else
+            print("The chest contained nothing of value.")
+        end
+    end
+    io.write("\nPress Enter to continue...")
+    io.read()
+end
+
+-- Random event: shrine requesting a blood sacrifice.  Accepting
+-- damages the player and grants the Blood Strike ability.  Denying
+-- moves on without effect.
+local function shrine_event()
+    clear_console()
+    print("🩸 You come across an ancient shrine demanding blood in exchange for power.")
+    print("It whispers:\27[131m 'Offer your blood, or turn away.' \27[0m")
+    print("\n1. Accept the sacrifice (lose 20 HP)")
+    print("2. Deny and move on")
+    io.write("\nYour choice: ")
+    local choice = io.read()
+    if choice == "1" then
+        if player.hp > 20 then
+            player.hp = player.hp - 20
+            player.blood_strike_ability = true
+            print("\nYou offer your blood. (HP -20)")
+            print("The shrine bestows upon you the Blood Strike ability!\nYou can now sacrifice 20 HP and 8 stamina to unleash a powerful strike.")
+        else
+            print("\n❌ You are too weak to make a sacrifice. The shrine's power fades.")
+        end
+    else
+        print("\nYou refuse the shrine's request and continue on your way.")
+    end
+    io.write("\nPress Enter to continue...")
+    io.read()
+end
+
+-- Determine whether a random event should occur.  Returns true if an
+-- event was executed.  A small chance triggers either the chest
+-- event or the shrine event.
+local function trigger_random_event()
+    -- 15% chance that an event occurs instead of a monster encounter
+    local event_roll = math.random(1, 100)
+    if event_roll <= 15 then
+        -- Decide which event: 60% chance chest, 40% shrine
+        local which = math.random(1, 100)
+        if which <= 60 then
+            chest_event()
+        else
+            shrine_event()
+        end
+        return true
+    end
+    return false
+end
 -- Shop function
 function run_shop()
     -- Clear the screen and generate a fresh set of shop items once per shop visit
@@ -618,10 +788,9 @@ function run_shop()
         -- fleeing and consumed here to avoid cluttering the arena output.
         if pending_flee_message ~= nil then
             print(pending_flee_message)
-            print("------")
             pending_flee_message = nil
         end
-        print("🏪 Welcome to the shop!")
+        print("HP ❤️ : " .. player.hp .. "/" .. player.max_hp .." | Stamina ⚡: " .. player.stamina .. "/" .. player.max_stamina .. "\n------\n🏪 Welcome to the shop!")
         print("💰 Your coins: " .. player.coins)
         print("❤️  Health Potions: " .. player.health_potions .. " | ⚡ Stamina Potions: " .. player.stamina_potions .. " | 🧪 Evasion Potions: " .. player.evasion_potions)
         print("\nItems for sale:")
@@ -704,22 +873,42 @@ function run_shop()
             io.write("\nPress Enter to continue...")
             io.read()
         elseif choice_num == #shop_items + 4 then
-            -- View inventory and stats
+            -- View inventory and optionally sell items
             clear_console()
             print("🎒 Your Inventory:\n")
-            print("❤️   " .. player.health_potions .. " | ⚡  " .. player.stamina_potions .. " | 🧪  " .. player.evasion_potions)
+            print("❤️   " .. player.health_potions .. " | ⚡  " .. player.stamina_potions .. " | 🧪  " .. player.evasion_potions .. " | 💰  " .. player.coins .. "\n")
             if #player.inventory == 0 then
                 print("\n  Empty")
             else
                 for i, item in ipairs(player.inventory) do
-                    print("  " .. i .. ". " .. item.name .. " (" .. item.description .. ")")
+                    -- Show index and description for each item
+                    local price_str = item.price and ("\27[1;33m - Sell for \27[0m" .. "\27[1;33m" .. math.floor(item.price / 2) .. "\27[0m" .. "\27[1;33m coins\27[0m") or "\27[1;33m -unsellable\27[0m"
+                    print("  " .. i .. ". " .. item.name .. " (" .. item.description .. ")" .. price_str)
                 end
             end
-            print("\n\n\n📊 Level " .. player.level .. " | Your Stats:\n")
+            print("\n\n📊 Level " .. player.level .. " | Your Stats:\n")
             print("💪 Power: " .. player.power .. " | 🛡️  Defense: " .. player.defense .. " | 🎯 Accuracy: " .. player.accuracy)
-            print("\n🌀 Dodge: " .. player.dodge .. " | ❤️  Max HP: " .. player.max_hp .. " | " .. "\n\n⚡ Max Stamina: " .. player.max_stamina .. " | ♻️  Stamina Regen: " .. player.stamina_regen)
-            io.write("\n\n\nPress Enter to return to the shop...")
-            io.read()
+            print("\n💨 Dodge: " .. player.dodge .. " | ❤️  Max HP: " .. player.max_hp .. " | " .. "\n\n⚡ Max Stamina: " .. player.max_stamina .. " | ♻️  Stamina Regen: " .. player.stamina_regen)
+            -- If there are items, offer selling option
+            if #player.inventory > 0 then
+                io.write("\n\nEnter the number of an item to sell it for half price, or press Enter to return: ")
+                local sell_choice = io.read()
+                local sell_num = tonumber(sell_choice)
+                if sell_num then
+                    local success, value_or_msg, item_name = player:sell_item(sell_num)
+                    clear_console()
+                    if success then
+                        print("💸 Sold " .. item_name .. " for " .. value_or_msg .. " coins! Total coins: " .. player.coins)
+                    else
+                        print("❌ " .. value_or_msg)
+                    end
+                    io.write("\nPress Enter to continue...")
+                    io.read()
+                end
+            else
+                io.write("\n\nPress Enter to return to the shop...")
+                io.read()
+            end
         elseif choice_num == #shop_items + 5 then
             -- Return to the arena
             player.inshop = false
@@ -744,6 +933,15 @@ function run_arena()
             clear_for_transition()
             first_encounter = false
         end
+        -- Check for a random event before generating a monster.  If an
+        -- event occurs, skip spawning a monster and continue to the next
+        -- loop iteration.  Events like chests and shrines add variety
+        -- to the arena encounters.
+        if trigger_random_event() then
+            clear_for_transition()
+            goto continue_arena_loop
+        end
+
         local monster = generate_monster()
 
         if monster.is_boss then
@@ -786,8 +984,15 @@ function run_arena()
             option_idx = option_idx + 1
 
             actions[option_idx] = "strong_attack"
-            print(option_idx .. ". 💪 Strong Attack (cost 3 ⚡, +5 Power, -3 Defense)")
+            print(option_idx .. ". 💪 Strong Attack (-3⚡, +5 Power, -3 Defense)")
             option_idx = option_idx + 1
+
+            -- Blood Strike action unlocked from the shrine event
+            if player.blood_strike_ability then
+                actions[option_idx] = "blood_strike"
+                print(option_idx .. ". 🩸 Blood Strike (cost 20 HP, 8 ⚡, +8 Power/Accuracy, +50 Dodge)")
+                option_idx = option_idx + 1
+            end
 
             if player.heal_ability then
                 actions[option_idx] = "heal"
@@ -847,6 +1052,33 @@ function run_arena()
                     end
                 else
                     action_text = action_text .. "❌ Not enough stamina for Strong Attack!\n"
+                end
+            elseif selected == "blood_strike" then
+                -- Blood Strike: sacrifice 20 HP and 8 stamina to gain +8 power and accuracy for one attack and +50 dodge for one round
+                if player.blood_strike_ability then
+                    if player.stamina >= 8 and player.hp > 20 then
+                        player.stamina = player.stamina - 8
+                        player.hp = player.hp - 20
+                        local original_power = player.power
+                        local original_accuracy = player.accuracy
+                        player.power = player.power + 8
+                        player.accuracy = player.accuracy + 8
+                        player.temp_dodge_bonus = (player.temp_dodge_bonus or 0) + 50
+                        local hit, dmg = player:attack(monster)
+                        player.power = original_power
+                        player.accuracy = original_accuracy
+                        if hit then
+                            action_text = action_text .. "🩸 You unleashed a Blood Strike on " .. monster.name .. " and dealt " .. dmg .. " damage!\n"
+                        else
+                            action_text = action_text .. "💨 " .. monster.name .. " dodged your Blood Strike!\n"
+                        end
+                    else
+                        if player.stamina < 8 then
+                            action_text = action_text .. "❌ Not enough stamina for Blood Strike!\n"
+                        else
+                            action_text = action_text .. "❌ Not enough HP to sacrifice for Blood Strike!\n"
+                        end
+                    end
                 end
             elseif selected == "heal" then
                 -- Heal ability uses stamina to restore HP
@@ -928,7 +1160,8 @@ function run_arena()
                 end
 
                 -- Apply player's dodge chance (capped so monsters always have a chance)
-                local effective_dodge = player.dodge
+                -- Include any temporary dodge bonus from abilities like Blood Strike
+                local effective_dodge = player.dodge + (player.temp_dodge_bonus or 0)
                 if effective_dodge > 80 then
                     effective_dodge = 80
                 end
@@ -936,6 +1169,10 @@ function run_arena()
                 if dodge_roll <= effective_dodge then
                     action_text = action_text .. "💨 You dodged the attack!\n"
                     dmg = 0
+                end
+                -- Consume temporary dodge bonus after it has been applied
+                if player.temp_dodge_bonus and player.temp_dodge_bonus > 0 then
+                    player.temp_dodge_bonus = 0
                 end
 
                 if dmg > 0 then
@@ -1001,11 +1238,49 @@ function run_arena()
                 end
             end
 
+            -- Random item drops from monsters.  There is a chance that any
+            -- defeated monster will drop an item.  The rarity of the drop
+            -- scales with rarity: common items drop most often, rare items
+            -- drop infrequently.
+            do
+                local drop_chance = math.random(1, 100)
+                -- 20% chance to drop an item
+                if drop_chance <= 20 then
+                    -- Determine rarity: 5% rare, 25% uncommon, remainder common
+                    local rarity_roll = math.random(1, 100)
+                    local rarity
+                    if rarity_roll <= 5 then
+                        rarity = "rare"
+                    elseif rarity_roll <= 30 then
+                        rarity = "uncommon"
+                    else
+                        rarity = "common"
+                    end
+                    -- Build list of items of the chosen rarity
+                    local pool = {}
+                    for _, itm in ipairs(item_pool) do
+                        if itm.rarity == rarity then
+                            table.insert(pool, itm)
+                        end
+                    end
+                    if #pool > 0 then
+                        local drop = pool[math.random(#pool)]
+                        print("📦 The monster dropped " .. drop.name .. "! (" .. drop.description .. ")")
+                        player:add_item(drop)
+                    end
+                end
+            end
+
             -- Post‑combat choice: fight another or return to the shop.  Inform the player
             -- that choosing to continue fighting grants a bonus.  This tip
             -- encourages riskier play by rewarding consecutive battles.
-            print("\n💡 Tip: Staying to fight another monster grants 20 bonus coins!")
-            print("\n1. Fight another monster")
+            -- Show a random tip
+            local tip = tips[math.random(#tips)]
+            print("\nTip:\27[0m " .. tip)
+
+
+            
+            print("\n1. Fight another monster (+20 coins bonus)")
             print("2. Return to shop (free, no damage)")
             io.write("\nWhat would you like to do? ")
             local post_choice = io.read()
@@ -1022,6 +1297,8 @@ function run_arena()
         elseif player.inshop == false and player.hp > 0 then
             print("☠️ You were defeated... Game over!")
         end
+
+        ::continue_arena_loop::
     end
 end
 
