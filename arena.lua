@@ -5,8 +5,12 @@ function clear_console()
     -- Attempt to clear the console.  On Unix-like systems use "clear";
     -- on Windows systems, "cls" may be required.  os.execute returns
     -- system-dependent values which we ignore.
-    os.execute("cls")
-    -- For Windows compatibility, you could use: os.execute("cls")
+    -- Use package.config to detect path separator: Windows uses '\\'
+    if package and package.config and package.config:sub(1,1) == "\\" then
+        os.execute("cls")
+    else
+        os.execute("clear")
+    end
 end
 
 -- Clear only for major transitions (not during combat)
@@ -586,20 +590,20 @@ function show_stats_screen()
         print("")
 
         -- Display monster kill counts
-        for monster_type, count in pairs(monster_kills) do
+        for monster_type, count in pairs(player.monster_kills or {}) do
             print("| " .. count .. " | " .. monster_type .. "s killed")
         end
 
         -- Display boss kill counts (only if any bosses have been killed)
         local boss_displays = {}
-        for boss_name, count in pairs(boss_kill_counts) do
+        for boss_name, count in pairs(player.boss_kills or {}) do
             if count > 0 then
                 -- Extract monster type from boss name (e.g., "Goblin King" -> "Goblins")
                 local monster_type = string.match(boss_name, "^(%w+)")
                 if monster_type then
                     table.insert(boss_displays,
                         "| " ..
-                        (monster_kills[monster_type] or 0) .. " | " .. monster_type .. "s killed     | Boss: " .. count)
+                        (player.monster_kills[monster_type] or 0) .. " | " .. monster_type .. "s killed     | Boss: " .. count)
                 end
             end
         end
@@ -2003,8 +2007,8 @@ function generate_monster()
     end
 
     -- Check if boss should spawn (every 10 kills of same type)
-    if monster_kills[name] >= 10 then
-        monster_kills[name] = 0 -- Reset counter
+    if player.monster_kills and (player.monster_kills[name] or 0) >= 10 then
+        player.monster_kills[name] = 0 -- Reset counter
         return generate_boss(name, level)
     end
 
@@ -4676,10 +4680,10 @@ function run_arena()
                     else
                         print("✅ You defeated the " .. monster.name .. "!")
                         -- Increment kill counter for boss spawning
-                        for name, _ in pairs(monster_kills) do
+                        for name, _ in pairs(player.monster_kills or {}) do
                             if monster.name == name then
-                                monster_kills[name] = monster_kills[name] + 1
-                                if monster_kills[name] == 10 then
+                                player.monster_kills[name] = (player.monster_kills[name] or 0) + 1
+                                if player.monster_kills[name] == 10 then
                                     print("⚠️  You've killed 10 " .. name .. "s! A boss may appear soon...")
                                 end
                                 break
@@ -4918,7 +4922,7 @@ function run_arena()
     -- how close they were to surviving.  Also summarize collected
     -- resources, monsters slain and bosses defeated.
     local total_monsters = 0
-    for _, count in pairs(monster_kills) do
+    for _, count in pairs(player.monster_kills or {}) do
         total_monsters = total_monsters + count
     end
 
@@ -4931,7 +4935,7 @@ function run_arena()
     print("  Items Collected: " .. #player.inventory)
     -- Display how many bosses were defeated and which ones.
     local any_bosses = false
-    for name, count in pairs(boss_kill_counts) do
+    for name, count in pairs(player.boss_kills or {}) do
         if count > 0 then
             any_bosses = true
             break
@@ -5189,15 +5193,7 @@ while true do
         player.abilities_enabled.attack = true
         player.abilities_enabled.strong_attack = true
         
-        print("🧪 TEST MODE ACTIVATED! 🧪")
-        print("\27[38;5;240m════════════════════════════════════════════════\27[0m")
-        print("💪 All stats set to high values")
-        print("🧬 All abilities unlocked")
-        print("💰 9999 coins, 99 of each potion")
-        print("🌟 99 skill points")
-        print("\27[38;5;240m════════════════════════════════════════════════\27[0m")
-        print("Remember: You can only have " .. player.max_abilities .. " combat abilities enabled at once")
-        print("Go to the shop and use the Abilities menu to configure which ones to use")
+        print("TEST MODE ACTIVATED")
         io.write("\nPress Enter to start testing...")
         io.read()
     end
